@@ -265,10 +265,11 @@ const cleanImage = (img) => {
     return url;
 };
 
-const getHost = (req) => {
-    if (HOST_IP) return HOST_IP;
-    const hostHeader = req.headers.host || `localhost:${PORT}`;
-    return hostHeader.split(':')[0];
+const getHostInfo = (req) => {
+    // If Render or other proxy, use the public forwarded headers
+    const proto = req.headers['x-forwarded-proto'] || req.protocol;
+    const host = req.headers['x-forwarded-host'] || req.headers.host || `localhost:${PORT}`;
+    return { proto, host };
 };
 
 const safeArray = (value) => (Array.isArray(value) ? value : []);
@@ -692,8 +693,8 @@ app.get('/api/song', async (req, res) => {
             return sendError(res, 500, 'Failed to generate audio token');
         }
 
-        const host = getHost(req);
-        const proxyUrl = `http://${host}:${PORT}/api/stream?url=${encodeURIComponent(directPlayUrl)}`;
+        const { proto, host } = getHostInfo(req);
+        const proxyUrl = `${proto}://${host}/api/stream?url=${encodeURIComponent(directPlayUrl)}`;
 
         return res.json({
             success: true,
