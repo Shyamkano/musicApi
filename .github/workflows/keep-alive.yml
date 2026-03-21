@@ -1,14 +1,42 @@
-name: Keep API Alive
+name: Keep API Alive (Groovli)
 
 on:
   schedule:
     - cron: "*/10 * * * *"   # every 10 minutes
-  workflow_dispatch:         # allows manual run
+  workflow_dispatch:         # manual trigger
 
 jobs:
   ping:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Ping API
+      - name: Start Job Log
         run: |
-          curl -L https://musicapi-s1ci.onrender.com
+          echo "======================================="
+          echo "Groovli Keep Alive Job Started"
+          echo "Time: $(date)"
+          echo "======================================="
+
+      - name: Ping API Health Endpoint
+        run: |
+          echo "🌐 Pinging API..."
+          
+          RESPONSE=$(curl -s -o response.json -w "%{http_code}" https://musicapi-s1ci.onrender.com)
+          
+          echo " HTTP Status Code: $RESPONSE"
+          echo " Response Body:"
+          cat response.json
+
+          if [ "$RESPONSE" -ne 200 ]; then
+            echo "API is not healthy!"
+            exit 1
+          else
+            echo "API is alive and healthy!"
+          fi
+
+      - name: End Job Log
+        run: |
+          echo "======================================="
+          echo "Job Completed Successfully"
+          echo "Time: $(date)"
+          echo "======================================="
