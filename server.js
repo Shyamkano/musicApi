@@ -262,6 +262,10 @@ const cleanImage = (img) => {
     // Clean double protocols
     url = url.replace(/https?:\/\/https?:\/\//g, 'https://');
 
+    // FORCE HIGH QUALITY (500x500)
+    // JioSaavn image URLs usually end with 150x150.jpg or 50x50.jpg
+    url = url.replace(/150x150/g, '500x500').replace(/50x50/g, '500x500');
+
     return url;
 };
 
