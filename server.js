@@ -171,19 +171,19 @@ app.post('/api/user-playlists/:id/tracks', async (req, res) => {
         const rows = await db.select().from(playlists).where(eq(playlists.id, req.params.id));
         const playlist = rows[0];
         if (!playlist) return res.status(404).json({ error: 'Playlist not found' });
-        
+
         const existingTracks = playlist.tracks || [];
         if (existingTracks.find(t => t.id === track.id)) {
             return res.status(400).json({ error: 'Track already in playlist' });
         }
-        
+
         const updatedTracks = [...existingTracks, track];
-        
+
         const result = await db.update(playlists)
             .set({ tracks: updatedTracks })
             .where(eq(playlists.id, req.params.id))
             .returning();
-            
+
         res.json(result[0]);
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -264,7 +264,11 @@ const cleanImage = (img) => {
 
     // FORCE HIGH QUALITY (500x500)
     // JioSaavn image URLs usually end with 150x150.jpg or 50x50.jpg
-    url = url.replace(/150x150/g, '500x500').replace(/50x50/g, '500x500');
+    url = url.replace("150x150", "500x500").replace("50x50", "500x500");
+
+    // Fallback for some non-standard URL formats
+    if (url.includes("150")) url = url.replace("150", "500");
+    if (url.includes("50")) url = url.replace("50", "500");
 
     return url;
 };
@@ -409,11 +413,14 @@ app.get('/api/home', async (req, res) => {
 
         if (featuredArtists.length === 0) {
             featuredArtists.push(
-               { id: '459320', name: 'Arijit Singh', image: 'https://c.saavncdn.com/artists/Arijit_Singh_002_20230323062147_500x500.jpg' },
-               { id: '464232', name: 'Shreya Ghoshal', image: 'https://c.saavncdn.com/artists/Shreya_Ghoshal_004_20230206103606_500x500.jpg' },
-               { id: '456269', name: 'A.R. Rahman', image: 'https://c.saavncdn.com/artists/AR_Rahman_002_20210120084455_500x500.jpg' },
-               { id: '568565', name: 'Justin Bieber', image: 'https://c.saavncdn.com/artists/Justin_Bieber_005_20201127112246_500x500.jpg' },
-               { id: '646876', name: 'The Weeknd', image: 'https://c.saavncdn.com/artists/The_Weeknd_006_20221018210350_500x500.jpg' }
+                { id: '459320', name: 'Arijit Singh', image: 'https://c.saavncdn.com/artists/Arijit_Singh_500x500.jpg' },
+                { id: '464232', name: 'Shreya Ghoshal', image: 'https://c.saavncdn.com/artists/Shreya_Ghoshal_500x500.jpg' },
+                { id: '455931', name: 'Sonu Nigam', image: 'https://c.saavncdn.com/artists/Sonu_Nigam_500x500.jpg' },
+                { id: '468245', name: 'Diljit Dosanjh', image: 'https://c.saavncdn.com/artists/Diljit_Dosanjh_500x500.jpg' },
+                { id: '459633', name: 'Atif Aslam', image: 'https://c.saavncdn.com/artists/Atif_Aslam_500x500.jpg' },
+                { id: '461320', name: 'Anirudh Ravichander', image: 'https://c.saavncdn.com/artists/Anirudh_Ravichander_500x500.jpg' },
+                { id: '455000', name: 'Alka Yagnik', image: 'https://c.saavncdn.com/artists/Alka_Yagnik_500x500.jpg' },
+                { id: '459345', name: 'Badshah', image: 'https://c.saavncdn.com/artists/Badshah_500x500.jpg' }
             );
         }
 
