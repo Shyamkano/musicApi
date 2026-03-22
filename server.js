@@ -26,9 +26,11 @@ let redisReady = false;
 
 const initRedis = async () => {
     try {
-        redisClient = createClient();
-        redisClient.on('error', () => {
-            if (redisReady) console.log('⚠️ Redis disconnected');
+        const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
+        redisClient = createClient({ url: redisUrl });
+        
+        redisClient.on('error', (err) => {
+            if (redisReady) console.log('⚠️ Redis disconnected:', err.message);
             redisReady = false;
         });
         redisClient.on('connect', () => {
@@ -37,7 +39,7 @@ const initRedis = async () => {
         });
         await redisClient.connect();
     } catch (e) {
-        console.log('⚠️ Redis not available');
+        console.log('⚠️ Redis setup error:', e.message);
     }
 };
 initRedis();
