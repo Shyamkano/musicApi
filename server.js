@@ -263,12 +263,18 @@ const cleanImage = (img) => {
     url = url.replace(/https?:\/\/https?:\/\//g, 'https://');
 
     // FORCE HIGH QUALITY (500x500)
-    // JioSaavn image URLs usually end with 150x150.jpg or 50x50.jpg
-    url = url.replace("150x150", "500x500").replace("50x50", "500x500");
-
-    // Fallback for some non-standard URL formats
-    if (url.includes("150")) url = url.replace("150", "500");
-    if (url.includes("50")) url = url.replace("50", "500");
+    // Most JioSaavn URLs match these patterns: _150x150.jpg, _50x50.jpg, or /150/
+    if (url.includes('150x150')) {
+        url = url.replace('150x150', '500x500');
+    } else if (url.includes('50x50')) {
+        url = url.replace('50x50', '500x500');
+    } else {
+        // Fallback for smaller IDs or path-based resizing
+        url = url.replace(/_150(\.jpg|\.png)/, '_500$1')
+                 .replace(/_50(\.jpg|\.png)/, '_500$1')
+                 .replace('/150/', '/500/')
+                 .replace('/50/', '/500/');
+    }
 
     return url;
 };
@@ -413,14 +419,14 @@ app.get('/api/home', async (req, res) => {
 
         if (featuredArtists.length === 0) {
             featuredArtists.push(
-                { id: '459320', name: 'Arijit Singh', image: 'https://c.saavncdn.com/artists/Arijit_Singh_500x500.jpg' },
-                { id: '464232', name: 'Shreya Ghoshal', image: 'https://c.saavncdn.com/artists/Shreya_Ghoshal_500x500.jpg' },
-                { id: '455931', name: 'Sonu Nigam', image: 'https://c.saavncdn.com/artists/Sonu_Nigam_500x500.jpg' },
-                { id: '468245', name: 'Diljit Dosanjh', image: 'https://c.saavncdn.com/artists/Diljit_Dosanjh_500x500.jpg' },
-                { id: '459633', name: 'Atif Aslam', image: 'https://c.saavncdn.com/artists/Atif_Aslam_500x500.jpg' },
-                { id: '461320', name: 'Anirudh Ravichander', image: 'https://c.saavncdn.com/artists/Anirudh_Ravichander_500x500.jpg' },
-                { id: '455000', name: 'Alka Yagnik', image: 'https://c.saavncdn.com/artists/Alka_Yagnik_500x500.jpg' },
-                { id: '459345', name: 'Badshah', image: 'https://c.saavncdn.com/artists/Badshah_500x500.jpg' }
+                { id: "459320", name: "Arijit Singh", image: "https://c.saavncdn.com/artists/Arijit_Singh_500x500.jpg" },
+                { id: "464232", name: "Shreya Ghoshal", image: "https://c.saavncdn.com/artists/Shreya_Ghoshal_500x500.jpg" },
+                { id: "455931", name: "Sonu Nigam", image: "https://c.saavncdn.com/artists/Sonu_Nigam_500x500.jpg" },
+                { id: "468245", name: "Diljit Dosanjh", image: "https://c.saavncdn.com/artists/Diljit_Dosanjh_500x500.jpg" },
+                { id: "459633", name: "Atif Aslam", image: "https://c.saavncdn.com/artists/Atif_Aslam_500x500.jpg" },
+                { id: "461320", name: "Anirudh Ravichander", image: "https://c.saavncdn.com/artists/Anirudh_Ravichander_500x500.jpg" },
+                { id: "455000", name: "Alka Yagnik", image: "https://c.saavncdn.com/artists/Alka_Yagnik_500x500.jpg" },
+                { id: "459345", name: "Badshah", image: "https://c.saavncdn.com/artists/Badshah_500x500.jpg" }
             );
         }
 
