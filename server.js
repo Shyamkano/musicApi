@@ -221,10 +221,12 @@ app.delete('/api/user-playlists/:id', async (req, res) => {
     }
 });
 
+const CACHE_VERSION = 'v1.1'; // Change this to force clear cache
+
 const cacheGet = async (key) => {
     if (!redisReady || !redisClient) return null;
     try {
-        return await redisClient.get(key);
+        return await redisClient.get(`${CACHE_VERSION}:${key}`);
     } catch {
         return null;
     }
@@ -233,7 +235,7 @@ const cacheGet = async (key) => {
 const cacheSet = async (key, ttl, value) => {
     if (!redisReady || !redisClient) return;
     try {
-        await redisClient.setEx(key, ttl, value);
+        await redisClient.setEx(`${CACHE_VERSION}:${key}`, ttl, value);
     } catch {
         // ignore cache errors
     }
@@ -753,6 +755,7 @@ app.get('/api/song', async (req, res) => {
                     image: cleanImage(videoResults.thumbnail || videoResults.image),
                     duration: String(videoResults.seconds),
                     has_audio: true,
+                    is_yt: true,
                     audio_url: proxyUrl
                 }
             });
