@@ -5,7 +5,7 @@ import { createClient } from 'redis';
 import { db } from './db/index.js';
 import { users, likedSongs, playlists } from './db/schema.js';
 import { eq, and } from 'drizzle-orm';
-import ytSearch from 'yt-search';
+// import ytSearch from 'yt-search';
 import { Innertube } from 'youtubei.js';
 
 let youtubeEngine = null;
