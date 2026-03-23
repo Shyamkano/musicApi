@@ -5,6 +5,8 @@ import { createClient } from 'redis';
 import { db } from './db/index.js';
 import { users, likedSongs, playlists } from './db/schema.js';
 import { eq, and } from 'drizzle-orm';
+import ytSearch from 'yt-search';
+import ytdl from 'ytdl-core';
 
 const app = express();
 app.use(cors());
@@ -17,51 +19,6 @@ const PORT = process.env.PORT || 3001;
 const HOST_IP = process.env.HOST_IP || null;
 const SAAVN_BASE_URL =
     'https://www.jiosaavn.com/api.php?_format=json&_marker=0&api_version=4&ctx=web6dot0';
-
-// ==========================================
-// YOUTUBE (PIPED) CONFIG & HELPERS (ADDED)
-// ==========================================
-const PIPED_INSTANCES =[
-    'https://pipedapi.kavin.rocks',
-    'https://pipedapi.tokhmi.xyz',
-    'https://pipedapi.syncpundit.io'
-];
-
-const pipedFetch = async (endpoint) => {
-    for (const baseUrl of PIPED_INSTANCES) {
-        try {
-            const response = await axios.get(`${baseUrl}${endpoint}`, { timeout: 6000 });
-            return response.data;
-        } catch (err) { /* silent try next */ }
-    }
-    return null;
-};
-
-const extractYtId = (url) => url ? url.replace('/watch?v=', '').replace('/playlist?list=', '').split('&')[0] : null;
-
-const normalizeYtSong = (item) => {
-    if (!item || !item.url) return null;
-    return {
-        id: 'yt_' + extractYtId(item.url), // HIDDEN YT TAG
-        title: item.title,
-        artist: item.uploaderName || 'Unknown Artist',
-        image: item.thumbnail || '',
-        album_id: '',
-        has_audio: true,
-        type: 'song',
-    };
-};
-
-const normalizeYtPlaylist = (item) => {
-    if (!item || !item.url) return null;
-    return {
-        id: 'yt_' + extractYtId(item.url), // HIDDEN YT TAG
-        title: item.title,
-        subtitle: item.uploaderName || 'YouTube',
-        image: item.thumbnail || '',
-        type: 'playlist',
-    };
-};
 
 // ==========================================
 // REDIS SETUP (Optional — graceful fallback)
@@ -187,7 +144,7 @@ app.post('/api/user-playlists', async (req, res) => {
                 name: name.trim(),
                 description: description || '',
                 image: image || null,
-                tracks: Array.isArray(tracks) ? tracks :[],
+                tracks: Array.isArray(tracks) ? tracks : [],
             })
             .returning();
 
@@ -219,7 +176,7 @@ app.post('/api/user-playlists/:id/tracks', async (req, res) => {
         const playlist = rows[0];
         if (!playlist) return res.status(404).json({ error: 'Playlist not found' });
 
-        const existingTracks = playlist.tracks ||[];
+        const existingTracks = playlist.tracks || [];
         if (existingTracks.find(t => t.id === track.id)) {
             return res.status(400).json({ error: 'Track already in playlist' });
         }
@@ -310,11 +267,13 @@ const cleanImage = (img) => {
     url = url.replace(/https?:\/\/https?:\/\//g, 'https://');
 
     // FORCE HIGH QUALITY (500x500)
+    // Most JioSaavn URLs match these patterns: _150x150.jpg, _50x50.jpg, or /150/
     if (url.includes('150x150')) {
         url = url.replace('150x150', '500x500');
     } else if (url.includes('50x50')) {
         url = url.replace('50x50', '500x500');
     } else {
+        // Fallback for smaller IDs or path-based resizing
         url = url.replace(/_150(\.jpg|\.png)/, '_500$1')
                  .replace(/_50(\.jpg|\.png)/, '_500$1')
                  .replace('/150/', '/500/')
@@ -325,12 +284,13 @@ const cleanImage = (img) => {
 };
 
 const getHostInfo = (req) => {
+    // If Render or other proxy, use the public forwarded headers
     const proto = req.headers['x-forwarded-proto'] || req.protocol;
     const host = req.headers['x-forwarded-host'] || req.headers.host || `localhost:${PORT}`;
     return { proto, host };
 };
 
-const safeArray = (value) => (Array.isArray(value) ? value :[]);
+const safeArray = (value) => (Array.isArray(value) ? value : []);
 
 const normalizeSong = (song) => {
     if (!song?.id) return null;
@@ -397,7 +357,7 @@ const normalizeLyrics = (lyrics) => {
         .replace(/&#039;/g, "'")
         .replace(/&lt;/g, '<')
         .replace(/&gt;/g, '>')
-        .replace(/<[^>]*>/g, '') 
+        .replace(/<[^>]*>/g, '') // strip any other remaining tags
         .trim();
 };
 
@@ -418,16 +378,16 @@ app.get('/api/health', (req, res) => {
             status: 'ok',
             redis: redisReady ? 'connected' : 'offline (no cache)',
             time: new Date().toISOString(),
-            host: getHostInfo(req),
+            host: getHost(req),
         },
     });
 });
 
 // ==========================================
-// 2. HOME SCREEN (With YT Added)
+// 2. HOME SCREEN
 // ==========================================
 app.get('/api/home', async (req, res) => {
-    const cacheKey = 'home_data_v11_hybrid';
+    const cacheKey = 'home_data_v10';
 
     try {
         const cached = await cacheGet(cacheKey);
@@ -436,16 +396,7 @@ app.get('/api/home', async (req, res) => {
             return res.json(JSON.parse(cached));
         }
 
-        console.log('🌐 [Home] fetching from JioSaavn and YouTube...');
-        
-        // --- YT ADDED LOGIC ---
-        let ytTrendingSongs =[];
-        try {
-            const ytData = await pipedFetch('/trending?region=IN');
-            ytTrendingSongs = (ytData ||[]).filter(item => item.url && item.url.includes('/watch?v=')).map(normalizeYtSong).filter(Boolean);
-        } catch(e) {}
-        // --- END YT ADDED LOGIC ---
-
+        console.log('🌐 [Home] fetching from JioSaavn...');
         const response = await axios.get(`${SAAVN_BASE_URL}&__call=webapi.getLaunchData`);
         const raw = response.data || {};
 
@@ -455,22 +406,13 @@ app.get('/api/home', async (req, res) => {
         const topPlaylistsRaw = safeArray(raw.top_playlists || raw.new_featured_playlists);
         const trendingPlaylistsRaw = safeArray(raw.trending_playlists);
 
-        const saavnTrendingSongs = allTrending
+        const trendingSongs = allTrending
             .filter((item) => item.type === 'song')
             .map(normalizeSong)
             .filter((song) => song && song.has_audio)
             .slice(0, 15);
 
-        // --- MIX SAAVN & YT TRENDING ---
-        const trendingSongs =[];
-        const mixLimit = Math.max(saavnTrendingSongs.length, ytTrendingSongs.length);
-        for(let i=0; i < mixLimit; i++) {
-            if (saavnTrendingSongs[i]) trendingSongs.push(saavnTrendingSongs[i]);
-            if (ytTrendingSongs[i]) trendingSongs.push(ytTrendingSongs[i]);
-        }
-        // --- END MIX ---
-
-        const featuredArtists =[
+        const featuredArtists = [
             ...allTrending.filter((item) => item.type === 'artist'),
             ...chartsRaw.filter((item) => item.type === 'artist'),
         ]
@@ -510,7 +452,8 @@ app.get('/api/home', async (req, res) => {
             .filter(Boolean)
             .slice(0, 12);
 
-        const discoverMix =[
+        // Extra discover mix: charts + trending playlists (different from new_albums)
+        const discoverMix = [
             ...topCharts,
             ...trendingPlaylistsRaw.map(normalizePlaylist).filter(Boolean)
         ]
@@ -520,7 +463,7 @@ app.get('/api/home', async (req, res) => {
         const homeData = {
             success: true,
             data: {
-                trending_songs: trendingSongs, // Now contains both Saavn and YT!
+                trending_songs: trendingSongs,
                 featured_artists: featuredArtists,
                 new_albums: newAlbums,
                 top_charts: topCharts,
@@ -539,13 +482,13 @@ app.get('/api/home', async (req, res) => {
 });
 
 // ==========================================
-// 3. GLOBAL SEARCH (With YT Added)
+// 3. GLOBAL SEARCH
 // ==========================================
 app.get('/api/search', async (req, res) => {
     const query = String(req.query.query || '').trim();
     if (!query) return sendError(res, 400, 'Query required');
 
-    const cacheKey = `search:global_hybrid:${query.toLowerCase()}`;
+    const cacheKey = `search:global:${query.toLowerCase()}`;
 
     try {
         const cached = await cacheGet(cacheKey);
@@ -554,33 +497,39 @@ app.get('/api/search', async (req, res) => {
             return res.json(JSON.parse(cached));
         }
 
-        console.log(`🌐[Search] "${query}" fetching from JioSaavn & YT...`);
-        
-        // --- YT ADDED LOGIC ---
-        let ytSongs =[];
-        try {
-            const ytData = await pipedFetch(`/search?q=${encodeURIComponent(query)}&filter=all`);
-            ytSongs = (ytData?.items ||[]).filter(item => item.type === 'stream').map(normalizeYtSong).filter(Boolean).slice(0, 10);
-        } catch(e) {}
-        // --- END YT ADDED LOGIC ---
-
+        console.log(`🌐 [Search] "${query}" fetching from JioSaavn...`);
         const response = await axios.get(
             `${SAAVN_BASE_URL}&__call=search.getResults&q=${encodeURIComponent(query)}&n=20`
         );
 
         const results = safeArray(response.data?.results);
-        const saavnSongs = results.map(normalizeSong).filter(Boolean).slice(0, 20);
 
-        // --- MIX SAAVN & YT ---
-        const songs =[];
-        const mixLimit = Math.max(saavnSongs.length, ytSongs.length);
-        for(let i=0; i < mixLimit; i++) {
-            if (saavnSongs[i]) songs.push(saavnSongs[i]);
-            if (ytSongs[i]) songs.push(ytSongs[i]);
+        let songs = results
+            .map(normalizeSong)
+            .filter(Boolean)
+            .slice(0, 20);
+
+        // HYBRID SEARCH: If low results, add YouTube search
+        if (songs.length < 5) {
+            try {
+                const ytResults = await ytSearch(query);
+                const ytSongs = ytResults.videos.slice(0, 10).map(v => ({
+                    id: `yt_${v.videoId}`,
+                    title: cleanText(v.title),
+                    artist: cleanText(v.author.name),
+                    album: 'YouTube Music',
+                    image: cleanImage(v.thumbnail || v.image),
+                    duration: String(v.seconds),
+                    has_audio: true,
+                    is_yt: true 
+                }));
+                songs = [...songs, ...ytSongs];
+            } catch (ytErr) {
+                console.error('Hybrid search error:', ytErr.message);
+            }
         }
-        // --- END MIX ---
 
-        const payload = { success: true, data: songs }; // Now mixed!
+        const payload = { success: true, data: songs };
         await cacheSet(cacheKey, 86400, JSON.stringify(payload));
         return res.json(payload);
     } catch (error) {
@@ -590,7 +539,7 @@ app.get('/api/search', async (req, res) => {
 });
 
 // ==========================================
-// 4. SONG SEARCH (With YT Added)
+// 4. SONG SEARCH
 // ==========================================
 app.get('/api/search/songs', async (req, res) => {
     const query = String(req.query.query || '').trim();
@@ -599,35 +548,18 @@ app.get('/api/search/songs', async (req, res) => {
 
     if (!query) return sendError(res, 400, 'Query required');
 
-    const cacheKey = `search:songs_hybrid:${query.toLowerCase()}:${page}:${limit}`;
+    const cacheKey = `search:songs:${query.toLowerCase()}:${page}:${limit}`;
 
     try {
         const cached = await cacheGet(cacheKey);
         if (cached) return res.json(JSON.parse(cached));
-
-        // --- YT ADDED LOGIC ---
-        let ytSongs =[];
-        try {
-            const ytData = await pipedFetch(`/search?q=${encodeURIComponent(query)}&filter=music_songs`);
-            ytSongs = (ytData?.items ||[]).map(normalizeYtSong).filter(Boolean);
-        } catch(e) {}
-        // --- END YT ADDED LOGIC ---
 
         const response = await axios.get(
             `${SAAVN_BASE_URL}&__call=search.getResults&q=${encodeURIComponent(query)}&n=${limit}&p=${page}`
         );
 
         const results = safeArray(response.data?.results);
-        const saavnSongs = results.map(normalizeSong).filter(Boolean);
-
-        // --- MIX SAAVN & YT ---
-        const songs =[];
-        const mixLimit = Math.max(saavnSongs.length, ytSongs.length);
-        for(let i=0; i < mixLimit; i++) {
-            if (saavnSongs[i]) songs.push(saavnSongs[i]);
-            if (ytSongs[i]) songs.push(ytSongs[i]);
-        }
-        // --- END MIX ---
+        const songs = results.map(normalizeSong).filter(Boolean);
 
         const payload = { success: true, data: songs };
         await cacheSet(cacheKey, 86400, JSON.stringify(payload));
@@ -677,36 +609,18 @@ app.get('/api/search/artists', async (req, res) => {
 });
 
 // ==========================================
-// 4.3. PLAYLIST SEARCH (With YT Added)
+// 4.3. PLAYLIST SEARCH
 // ==========================================
 app.get('/api/search/playlists', async (req, res) => {
     const query = String(req.query.query || '').trim();
     if (!query) return sendError(res, 400, 'Query required');
 
     try {
-        // --- YT ADDED LOGIC ---
-        let ytPlaylists =[];
-        try {
-            const ytData = await pipedFetch(`/search?q=${encodeURIComponent(query)}&filter=music_playlists`);
-            ytPlaylists = (ytData?.items ||[]).map(normalizeYtPlaylist).filter(Boolean);
-        } catch(e) {}
-        // --- END YT ADDED LOGIC ---
-
         const response = await axios.get(
             `${SAAVN_BASE_URL}&__call=search.getPlaylistResults&q=${encodeURIComponent(query)}&n=20&p=0`
         );
         const results = safeArray(response.data?.results);
-        const saavnPlaylists = results.map(normalizePlaylist).filter(Boolean);
-
-        // --- MIX SAAVN & YT ---
-        const playlists =[];
-        const mixLimit = Math.max(saavnPlaylists.length, ytPlaylists.length);
-        for(let i=0; i < mixLimit; i++) {
-            if (saavnPlaylists[i]) playlists.push(saavnPlaylists[i]);
-            if (ytPlaylists[i]) playlists.push(ytPlaylists[i]);
-        }
-        // --- END MIX ---
-
+        const playlists = results.map(normalizePlaylist).filter(Boolean);
         return res.json({ success: true, data: playlists });
     } catch (error) {
         return sendError(res, 500, `Playlist search failed: ${error.message}`);
@@ -725,6 +639,7 @@ app.get('/api/artist', async (req, res) => {
             `${SAAVN_BASE_URL}&__call=artist.getArtistPageDetails&artistId=${artistId}`
         );
         const data = response.data;
+        // Broaden song search in artist data
         const topSongs = safeArray(data?.topSongs || data?.songs || data?.top_songs)
             .map(normalizeSong)
             .filter(Boolean);
@@ -750,32 +665,13 @@ app.get('/api/artist', async (req, res) => {
 });
 
 // ==========================================
-// 4.5. PLAYLIST DETAILS (With YT Added)
+// 4.5. PLAYLIST DETAILS
 // ==========================================
 app.get('/api/playlist', async (req, res) => {
     const playlistId = String(req.query.id || '').trim();
     if (!playlistId) return sendError(res, 400, 'Playlist ID required');
 
     try {
-        // --- YT ADDED LOGIC (HIDDEN TAG CATCHER) ---
-        if (playlistId.startsWith('yt_')) {
-            const ytId = playlistId.replace('yt_', '');
-            const data = await pipedFetch(`/playlists/${encodeURIComponent(ytId)}`);
-            if (!data) return sendError(res, 404, 'Playlist not found');
-            const songs = (data.relatedStreams ||[]).map(normalizeYtSong).filter(Boolean);
-            return res.json({
-                success: true,
-                data: {
-                    id: playlistId,
-                    title: cleanText(data.name || data.title),
-                    image: data.thumbnailUrl || '',
-                    song_count: songs.length,
-                    songs: songs
-                }
-            });
-        }
-        // --- END YT ADDED LOGIC ---
-
         const response = await axios.get(
             `${SAAVN_BASE_URL}&__call=playlist.getDetails&listid=${playlistId}`
         );
@@ -798,39 +694,41 @@ app.get('/api/playlist', async (req, res) => {
 });
 
 // ==========================================
-// 5. SONG DETAILS + STREAM URL (With YT Added)
+// 5. SONG DETAILS + STREAM URL
+// NEVER CACHE — token expires
 // ==========================================
 app.get('/api/song', async (req, res) => {
     const songId = String(req.query.id || '').trim();
     if (!songId) return sendError(res, 400, 'Song ID required');
 
-    try {
-        console.log(`🎵 [Song] fetching details for ID: ${songId}`);
-
-        // --- YT ADDED LOGIC (HIDDEN TAG CATCHER) ---
-        if (songId.startsWith('yt_')) {
-            const ytId = songId.replace('yt_', '');
-            const data = await pipedFetch(`/streams/${encodeURIComponent(ytId)}`);
-            if (!data || !data.audioStreams || data.audioStreams.length === 0) {
-                return sendError(res, 404, 'Audio stream not found');
-            }
-            const bestAudio = data.audioStreams.sort((a, b) => b.bitrate - a.bitrate)[0];
+    // Handle YouTube IDs
+    if (songId.startsWith('yt_')) {
+        const videoId = songId.replace('yt_', '');
+        try {
+            const videoResults = await ytSearch({ videoId });
+            const { proto, host } = getHostInfo(req);
+            const proxyUrl = `${proto}://${host}/api/stream?yt_id=${videoId}`;
+            
             return res.json({
                 success: true,
                 data: {
-                    id: songId, // Return the exact yt_ id
-                    title: cleanText(data.title),
-                    artist: cleanText(data.uploader),
+                    id: songId,
+                    title: cleanText(videoResults.title),
+                    artist: cleanText(videoResults.author.name),
                     album: 'YouTube Music',
-                    image: data.thumbnailUrl || '',
-                    duration: data.duration || '0',
-                    has_lyrics: true, // We support lyrics via LRCLIB
-                    album_id: '',
-                    audio_url: bestAudio.url, // Directly stream to mobile app!
-                },
+                    image: cleanImage(videoResults.thumbnail || videoResults.image),
+                    duration: String(videoResults.seconds),
+                    has_audio: true,
+                    audio_url: proxyUrl
+                }
             });
+        } catch (e) {
+            return sendError(res, 500, 'YouTube song fetch failed');
         }
-        // --- END YT ADDED LOGIC ---
+    }
+
+    try {
+        console.log(`🎵 [Song] fetching details for ID: ${songId}`);
 
         const response = await axios.get(
             `${SAAVN_BASE_URL}&__call=song.getDetails&pids=${encodeURIComponent(songId)}`
@@ -945,13 +843,13 @@ app.get('/api/album', async (req, res) => {
 });
 
 // ==========================================
-// 7. LYRICS (With YT Added)
+// 7. LYRICS
 // ==========================================
 app.get('/api/lyrics', async (req, res) => {
     const songId = String(req.query.id || '').trim();
     if (!songId) return sendError(res, 400, 'Song ID required');
 
-    const cacheKey = `lyrics_hybrid:${songId}`;
+    const cacheKey = `lyrics:${songId}`;
 
     try {
         const cached = await cacheGet(cacheKey);
@@ -960,32 +858,7 @@ app.get('/api/lyrics', async (req, res) => {
             return res.json(JSON.parse(cached));
         }
 
-        console.log(`🌐 [Lyrics] ${songId} fetching...`);
-
-        // --- YT ADDED LOGIC (HIDDEN TAG CATCHER) ---
-        if (songId.startsWith('yt_')) {
-            const ytId = songId.replace('yt_', '');
-            const streamData = await pipedFetch(`/streams/${ytId}`);
-            if (!streamData) return sendError(res, 404, 'Lyrics not found');
-            
-            const track = streamData.title.replace(/ *\([^)]*\) */g, ""); 
-            const artist = streamData.uploader.replace(' - Topic', ''); 
-            
-            const url = `https://lrclib.net/api/search?track_name=${encodeURIComponent(track)}&artist_name=${encodeURIComponent(artist)}`;
-            const lrcRes = await axios.get(url);
-            
-            if (lrcRes.data && lrcRes.data.length > 0) {
-                const lyricsData = {
-                    success: true,
-                    data: { lyrics: lrcRes.data[0].syncedLyrics || lrcRes.data[0].plainLyrics || '' }
-                };
-                await cacheSet(cacheKey, 86400, JSON.stringify(lyricsData));
-                return res.json(lyricsData);
-            }
-            return sendError(res, 404, 'Lyrics not found');
-        }
-        // --- END YT ADDED LOGIC ---
-
+        console.log(`🌐 [Lyrics] ${songId} fetching from JioSaavn...`);
         const response = await axios.get(
             `${SAAVN_BASE_URL}&__call=lyrics.getLyrics&lyrics_id=${encodeURIComponent(songId)}`
         );
@@ -1087,10 +960,20 @@ app.get('/api/artist', async (req, res) => {
 // ==========================================
 app.get('/api/stream', async (req, res) => {
     const audioUrl = String(req.query.url || '').trim();
-    if (!audioUrl) return res.status(400).send('No audio URL provided');
+    const ytId = String(req.query.yt_id || '').trim();
+    
+    if (!audioUrl && !ytId) return res.status(400).send('No audio/YT ID provided');
 
     try {
-        console.log('🔊 [Stream] proxying audio');
+        console.log(`🔊 [Stream] proxying ${ytId ? 'YT:' + ytId : 'URL'}`);
+        
+        let stream;
+        if (ytId) {
+            // High quality audio-only stream from YT
+            stream = ytdl(ytId, { filter: 'audioonly', quality: 'highestaudio' });
+            res.setHeader('Content-Type', 'audio/mpeg');
+            return stream.pipe(res);
+        }
 
         const range = req.headers.range;
 
@@ -1145,7 +1028,7 @@ app.use((req, res) => {
 app.listen(PORT, () => {
     console.log('\n==============================================');
     console.log(`🎵 Groovli Music API running on port ${PORT}`);
-    console.log(`📡 JioSaavn + YT Hidden Mix: ACTIVE`);
+    console.log(`📡 JioSaavn proxy: active`);
     console.log(`📦 Redis cache: ${redisReady ? 'enabled' : 'disabled (will retry)'}`);
     console.log(`🌐 HOST_IP override: ${HOST_IP || 'auto-detect from request host'}`);
     console.log('==============================================\n');
