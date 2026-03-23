@@ -508,47 +508,53 @@ app.get('/api/search', async (req, res) => {
             return res.json(JSON.parse(cached));
         }
 
-        console.log(`🌐 [Search] "${query}" fetching from JioSaavn...`);
-        const response = await axios.get(
-            `${SAAVN_BASE_URL}&__call=search.getResults&q=${encodeURIComponent(query)}&n=20`
-        );
+        console.log(`🌐 [Search] "${query}" fetching...`);
+        
+        // 1. Fetch JioSaavn results
+        const saavnRes = await axios.get(
+            `${SAAVN_BASE_URL}&__call=search.getResults&q=${encodeURIComponent(query)}&n=15`
+        ).catch(() => ({ data: { results: [] } }));
 
-        const results = safeArray(response.data?.results);
-
-        let songs = results
+        let saavnSongs = safeArray(saavnRes.data?.results)
             .map(normalizeSong)
-            .filter(Boolean)
-            .slice(0, 20);
+            .filter(Boolean);
 
-        // INTELLIGENT HYBRID FALLBACK: 
-        // 1. If 0 results on Saavn
-        // 2. OR if the first result name doesn't closely match the query (Saavn often returns random things)
-        const topResultMatches = songs.length > 0 && 
-            (songs[0].title.toLowerCase().includes(query.split(' ')[0].toLowerCase()) || 
-             songs[0].artist.toLowerCase().includes(query.split(' ')[0].toLowerCase()));
-
-        if (songs.length === 0 || (!topResultMatches && query.length > 5)) {
-            console.log(`🌍 [Hybrid] Saavn relevance low for "${query}", injecting YouTube results...`);
-            try {
-                const ytResults = await ytSearch(query);
-                const ytSongs = ytResults.videos.slice(0, 15).map(v => ({
-                    id: `yt_${v.videoId}`,
-                    title: cleanText(v.title),
-                    artist: cleanText(v.author.name),
-                    album: 'YouTube Music',
-                    image: cleanImage(v.thumbnail || v.image),
-                    duration: String(v.seconds),
-                    has_audio: true,
-                    is_yt: true 
-                }));
-                // If it was a clearly international query, put YT results first
-                songs = [...ytSongs, ...songs];
-            } catch (ytErr) {
-                console.error('Hybrid search error:', ytErr.message);
-            }
+        // 2. Fetch YouTube results
+        let ytSongs = [];
+        try {
+            const ytResults = await ytSearch(query);
+            ytSongs = ytResults.videos.slice(0, 15).map(v => ({
+                id: `yt_${v.videoId}`,
+                title: cleanText(v.title),
+                artist: cleanText(v.author.name),
+                album: 'YouTube Music',
+                image: cleanImage(v.thumbnail || v.image || ''),
+                duration: String(v.seconds),
+                has_audio: true,
+                is_yt: true 
+            }));
+        } catch (ytErr) {
+            console.error('YouTube search error:', ytErr.message);
         }
 
-        const payload = { success: true, data: songs };
+        // INTELLIGENT MERGING:
+        // Detect if the query is primarily "International" or poorly matched on Saavn
+        const topSaavnMatch = saavnSongs.length > 0 && 
+            (saavnSongs[0].title.toLowerCase().includes(query.split(' ')[0].toLowerCase()) || 
+             saavnSongs[0].artist.toLowerCase().includes(query.split(' ')[0].toLowerCase()));
+
+        const isInternational = /^[a-zA-Z0-9\s!\?]+$/.test(query) && query.length > 3;
+        
+        let finalSongs = [];
+        if (!topSaavnMatch && isInternational) {
+            // Put YouTube first for international/missing hits
+            finalSongs = [...ytSongs, ...saavnSongs];
+        } else {
+            // Keep Saavn first for Indian hits
+            finalSongs = [...saavnSongs, ...ytSongs];
+        }
+
+        const payload = { success: true, data: finalSongs.slice(0, 30) };
         await cacheSet(cacheKey, 86400, JSON.stringify(payload));
         return res.json(payload);
     } catch (error) {
