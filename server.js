@@ -509,11 +509,18 @@ app.get('/api/search', async (req, res) => {
             .filter(Boolean)
             .slice(0, 20);
 
-        // HYBRID SEARCH: If low results, add YouTube search
-        if (songs.length < 5) {
+        // INTELLIGENT HYBRID FALLBACK: 
+        // 1. If 0 results on Saavn
+        // 2. OR if the first result name doesn't closely match the query (Saavn often returns random things)
+        const topResultMatches = songs.length > 0 && 
+            (songs[0].title.toLowerCase().includes(query.split(' ')[0].toLowerCase()) || 
+             songs[0].artist.toLowerCase().includes(query.split(' ')[0].toLowerCase()));
+
+        if (songs.length === 0 || (!topResultMatches && query.length > 5)) {
+            console.log(`🌍 [Hybrid] Saavn relevance low for "${query}", injecting YouTube results...`);
             try {
                 const ytResults = await ytSearch(query);
-                const ytSongs = ytResults.videos.slice(0, 10).map(v => ({
+                const ytSongs = ytResults.videos.slice(0, 15).map(v => ({
                     id: `yt_${v.videoId}`,
                     title: cleanText(v.title),
                     artist: cleanText(v.author.name),
@@ -523,7 +530,8 @@ app.get('/api/search', async (req, res) => {
                     has_audio: true,
                     is_yt: true 
                 }));
-                songs = [...songs, ...ytSongs];
+                // If it was a clearly international query, put YT results first
+                songs = [...ytSongs, ...songs];
             } catch (ytErr) {
                 console.error('Hybrid search error:', ytErr.message);
             }
@@ -639,19 +647,28 @@ app.get('/api/artist', async (req, res) => {
             `${SAAVN_BASE_URL}&__call=artist.getArtistPageDetails&artistId=${artistId}`
         );
         const data = response.data;
-        // Broaden song search in artist data
-        const topSongs = safeArray(data?.topSongs || data?.songs || data?.top_songs)
+        
+        let topSongs = safeArray(data?.topSongs || data?.songs || data?.top_songs)
             .map(normalizeSong)
             .filter(Boolean);
         const topAlbums = safeArray(data?.topAlbums || data?.albums)
             .map(normalizeAlbum)
             .filter(Boolean);
 
+        // FIX: If artist page is empty, fetch songs independently via search
+        if (topSongs.length === 0 && data.name) {
+            console.log(`🔍 [Artist Fix] Fetching top songs for ${data.name} via search...`);
+            const searchRes = await axios.get(
+                `${SAAVN_BASE_URL}&__call=search.getResults&q=${encodeURIComponent(data.name)}&n=15`
+            );
+            topSongs = safeArray(searchRes.data?.results).map(normalizeSong).filter(Boolean);
+        }
+
         return res.json({
             success: true,
             data: {
-                id: data.artistId || data.id,
-                name: cleanText(data.name || data.title),
+                id: String(data.artistId || data.id || artistId),
+                name: cleanText(data.name || data.title || ''),
                 image: cleanImage(data.image),
                 follower_count: data.follower_count || 0,
                 top_songs: topSongs,
