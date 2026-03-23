@@ -5,19 +5,6 @@ import { createClient } from 'redis';
 import { db } from './db/index.js';
 import { users, likedSongs, playlists } from './db/schema.js';
 import { eq, and } from 'drizzle-orm';
-// import ytSearch from 'yt-search';
-import { Innertube } from 'youtubei.js';
-
-let youtubeEngine = null;
-const initYoutube = async () => {
-    try {
-        youtubeEngine = await Innertube.create();
-        console.log('✅ YouTube Engine Initialized');
-    } catch (e) {
-        console.error('❌ YouTube Engine Init Failed:', e.message);
-    }
-};
-initYoutube();
 
 const app = express();
 app.use(cors());
@@ -508,53 +495,19 @@ app.get('/api/search', async (req, res) => {
             return res.json(JSON.parse(cached));
         }
 
-        console.log(`🌐 [Search] "${query}" fetching...`);
-        
-        // 1. Fetch JioSaavn results
-        const saavnRes = await axios.get(
-            `${SAAVN_BASE_URL}&__call=search.getResults&q=${encodeURIComponent(query)}&n=15`
-        ).catch(() => ({ data: { results: [] } }));
+        console.log(`🌐 [Search] "${query}" fetching from JioSaavn...`);
+        const response = await axios.get(
+            `${SAAVN_BASE_URL}&__call=search.getResults&q=${encodeURIComponent(query)}&n=20`
+        );
 
-        let saavnSongs = safeArray(saavnRes.data?.results)
+        const results = safeArray(response.data?.results);
+
+        const songs = results
             .map(normalizeSong)
-            .filter(Boolean);
+            .filter(Boolean)
+            .slice(0, 20);
 
-        // 2. Fetch YouTube results
-        let ytSongs = [];
-        try {
-            const ytResults = await ytSearch(query);
-            ytSongs = ytResults.videos.slice(0, 15).map(v => ({
-                id: `yt_${v.videoId}`,
-                title: cleanText(v.title),
-                artist: cleanText(v.author.name),
-                album: 'YouTube Music',
-                image: cleanImage(v.thumbnail || v.image || ''),
-                duration: String(v.seconds),
-                has_audio: true,
-                is_yt: true 
-            }));
-        } catch (ytErr) {
-            console.error('YouTube search error:', ytErr.message);
-        }
-
-        // INTELLIGENT MERGING:
-        // Detect if the query is primarily "International" or poorly matched on Saavn
-        const topSaavnMatch = saavnSongs.length > 0 && 
-            (saavnSongs[0].title.toLowerCase().includes(query.split(' ')[0].toLowerCase()) || 
-             saavnSongs[0].artist.toLowerCase().includes(query.split(' ')[0].toLowerCase()));
-
-        const isInternational = /^[a-zA-Z0-9\s!\?]+$/.test(query) && query.length > 3;
-        
-        let finalSongs = [];
-        if (!topSaavnMatch && isInternational) {
-            // Put YouTube first for international/missing hits
-            finalSongs = [...ytSongs, ...saavnSongs];
-        } else {
-            // Keep Saavn first for Indian hits
-            finalSongs = [...saavnSongs, ...ytSongs];
-        }
-
-        const payload = { success: true, data: finalSongs.slice(0, 30) };
+        const payload = { success: true, data: songs };
         await cacheSet(cacheKey, 86400, JSON.stringify(payload));
         return res.json(payload);
     } catch (error) {
@@ -664,28 +617,19 @@ app.get('/api/artist', async (req, res) => {
             `${SAAVN_BASE_URL}&__call=artist.getArtistPageDetails&artistId=${artistId}`
         );
         const data = response.data;
-        
-        let topSongs = safeArray(data?.topSongs || data?.songs || data?.top_songs)
+        // Broaden song search in artist data
+        const topSongs = safeArray(data?.topSongs || data?.songs || data?.top_songs)
             .map(normalizeSong)
             .filter(Boolean);
         const topAlbums = safeArray(data?.topAlbums || data?.albums)
             .map(normalizeAlbum)
             .filter(Boolean);
 
-        // FIX: If artist page is empty, fetch songs independently via search
-        if (topSongs.length === 0 && data.name) {
-            console.log(`🔍 [Artist Fix] Fetching top songs for ${data.name} via search...`);
-            const searchRes = await axios.get(
-                `${SAAVN_BASE_URL}&__call=search.getResults&q=${encodeURIComponent(data.name)}&n=15`
-            );
-            topSongs = safeArray(searchRes.data?.results).map(normalizeSong).filter(Boolean);
-        }
-
         return res.json({
             success: true,
             data: {
-                id: String(data.artistId || data.id || artistId),
-                name: cleanText(data.name || data.title || ''),
+                id: data.artistId || data.id,
+                name: cleanText(data.name || data.title),
                 image: cleanImage(data.image),
                 follower_count: data.follower_count || 0,
                 top_songs: topSongs,
@@ -734,32 +678,6 @@ app.get('/api/playlist', async (req, res) => {
 app.get('/api/song', async (req, res) => {
     const songId = String(req.query.id || '').trim();
     if (!songId) return sendError(res, 400, 'Song ID required');
-
-    // Handle YouTube IDs
-    if (songId.startsWith('yt_')) {
-        const videoId = songId.replace('yt_', '');
-        try {
-            const videoResults = await ytSearch({ videoId });
-            const { proto, host } = getHostInfo(req);
-            const proxyUrl = `${proto}://${host}/api/stream?yt_id=${videoId}`;
-            
-            return res.json({
-                success: true,
-                data: {
-                    id: songId,
-                    title: cleanText(videoResults.title),
-                    artist: cleanText(videoResults.author.name),
-                    album: 'YouTube Music',
-                    image: cleanImage(videoResults.thumbnail || videoResults.image),
-                    duration: String(videoResults.seconds),
-                    has_audio: true,
-                    audio_url: proxyUrl
-                }
-            });
-        } catch (e) {
-            return sendError(res, 500, 'YouTube song fetch failed');
-        }
-    }
 
     try {
         console.log(`🎵 [Song] fetching details for ID: ${songId}`);
@@ -994,35 +912,10 @@ app.get('/api/artist', async (req, res) => {
 // ==========================================
 app.get('/api/stream', async (req, res) => {
     const audioUrl = String(req.query.url || '').trim();
-    const ytId = String(req.query.yt_id || '').trim();
-    
-    if (!audioUrl && !ytId) return res.status(400).send('No audio/YT ID provided');
+    if (!audioUrl) return res.status(400).send('No audio URL provided');
 
     try {
-        console.log(`🔊 [Stream] proxying ${ytId ? 'YT:' + ytId : 'URL'}`);
-        
-        let stream;
-        if (ytId && youtubeEngine) {
-            console.log(`🔊 [Stream] resolving hq audio for: ${ytId}`);
-            try {
-                const info = await youtubeEngine.getInfo(ytId);
-                const format = info.chooseFormat({ type: 'audio', quality: 'best' });
-                if (!format) throw new Error('No audio format');
-                
-                const response = await axios({
-                    method: 'GET',
-                    url: format.url,
-                    responseType: 'stream',
-                    validateStatus: () => true,
-                });
-                
-                res.setHeader('Content-Type', 'audio/mpeg');
-                return response.data.pipe(res);
-            } catch (err) {
-                console.error('[Stream] YT Resolve Error:', err.message);
-                return res.status(500).send('YT Streaming Failed');
-            }
-        }
+        console.log('🔊 [Stream] proxying audio');
 
         const range = req.headers.range;
 
