@@ -6,7 +6,18 @@ import { db } from './db/index.js';
 import { users, likedSongs, playlists } from './db/schema.js';
 import { eq, and } from 'drizzle-orm';
 import ytSearch from 'yt-search';
-import ytdl from 'ytdl-core';
+import { Innertube } from 'youtubei.js';
+
+let youtubeEngine = null;
+const initYoutube = async () => {
+    try {
+        youtubeEngine = await Innertube.create();
+        console.log('✅ YouTube Engine Initialized');
+    } catch (e) {
+        console.error('❌ YouTube Engine Init Failed:', e.message);
+    }
+};
+initYoutube();
 
 const app = express();
 app.use(cors());
@@ -985,11 +996,26 @@ app.get('/api/stream', async (req, res) => {
         console.log(`🔊 [Stream] proxying ${ytId ? 'YT:' + ytId : 'URL'}`);
         
         let stream;
-        if (ytId) {
-            // High quality audio-only stream from YT
-            stream = ytdl(ytId, { filter: 'audioonly', quality: 'highestaudio' });
-            res.setHeader('Content-Type', 'audio/mpeg');
-            return stream.pipe(res);
+        if (ytId && youtubeEngine) {
+            console.log(`🔊 [Stream] resolving hq audio for: ${ytId}`);
+            try {
+                const info = await youtubeEngine.getInfo(ytId);
+                const format = info.chooseFormat({ type: 'audio', quality: 'best' });
+                if (!format) throw new Error('No audio format');
+                
+                const response = await axios({
+                    method: 'GET',
+                    url: format.url,
+                    responseType: 'stream',
+                    validateStatus: () => true,
+                });
+                
+                res.setHeader('Content-Type', 'audio/mpeg');
+                return response.data.pipe(res);
+            } catch (err) {
+                console.error('[Stream] YT Resolve Error:', err.message);
+                return res.status(500).send('YT Streaming Failed');
+            }
         }
 
         const range = req.headers.range;
