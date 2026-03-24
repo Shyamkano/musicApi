@@ -11,6 +11,24 @@ app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
 // ==========================================
+// AXIOS CONFIG (Bypass Geo-blocking on Render)
+// ==========================================
+const getRandomIndianIp = () => {
+    // Generate a random Indian IP (49.x.x.x is common for Jio/Airtel)
+    return `49.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}`;
+};
+
+axios.interceptors.request.use((config) => {
+    // Inject headers into EVERY request sent to JioSaavn
+    config.headers['X-Forwarded-For'] = getRandomIndianIp();
+    config.headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
+    config.headers['Origin'] = 'https://www.jiosaavn.com';
+    config.headers['Referer'] = 'https://www.jiosaavn.com/';
+    config.headers['Accept'] = 'application/json, text/plain, */*';
+    return config;
+});
+
+// ==========================================
 // CONFIG
 // ==========================================
 const PORT = process.env.PORT || 3001;
@@ -265,13 +283,11 @@ const cleanImage = (img) => {
     url = url.replace(/https?:\/\/https?:\/\//g, 'https://');
 
     // FORCE HIGH QUALITY (500x500)
-    // Most JioSaavn URLs match these patterns: _150x150.jpg, _50x50.jpg, or /150/
     if (url.includes('150x150')) {
         url = url.replace('150x150', '500x500');
     } else if (url.includes('50x50')) {
         url = url.replace('50x50', '500x500');
     } else {
-        // Fallback for smaller IDs or path-based resizing
         url = url.replace(/_150(\.jpg|\.png)/, '_500$1')
                  .replace(/_50(\.jpg|\.png)/, '_500$1')
                  .replace('/150/', '/500/')
@@ -282,7 +298,6 @@ const cleanImage = (img) => {
 };
 
 const getHostInfo = (req) => {
-    // If Render or other proxy, use the public forwarded headers
     const proto = req.headers['x-forwarded-proto'] || req.protocol;
     const host = req.headers['x-forwarded-host'] || req.headers.host || `localhost:${PORT}`;
     return { proto, host };
@@ -355,7 +370,7 @@ const normalizeLyrics = (lyrics) => {
         .replace(/&#039;/g, "'")
         .replace(/&lt;/g, '<')
         .replace(/&gt;/g, '>')
-        .replace(/<[^>]*>/g, '') // strip any other remaining tags
+        .replace(/<[^>]*>/g, '') 
         .trim();
 };
 
@@ -376,7 +391,7 @@ app.get('/api/health', (req, res) => {
             status: 'ok',
             redis: redisReady ? 'connected' : 'offline (no cache)',
             time: new Date().toISOString(),
-            host: getHostInfo(req).host, // Fixed typo in your original file from `getHost` to `getHostInfo`
+            host: getHostInfo(req).host,
         },
     });
 });
@@ -451,7 +466,6 @@ app.get('/api/home', async (req, res) => {
             .filter(Boolean)
             .slice(0, 12);
 
-        // Extra discover mix: charts + trending playlists (different from new_albums)
         const discoverMix =[
             ...topCharts,
             ...trendingPlaylistsRaw.map(normalizePlaylist).filter(Boolean)
@@ -627,7 +641,6 @@ app.get('/api/artist', async (req, res) => {
             `${SAAVN_BASE_URL}&__call=artist.getArtistPageDetails&artistId=${artistId}`
         );
         const data = response.data;
-        // Broaden song search in artist data
         const topSongs = safeArray(data?.topSongs || data?.songs || data?.top_songs)
             .map(normalizeSong)
             .filter(Boolean);
@@ -981,7 +994,7 @@ app.use((req, res) => {
 app.listen(PORT, () => {
     console.log('\n==============================================');
     console.log(`🎵 Groovli Music API running on port ${PORT}`);
-    console.log(`📡 JioSaavn proxy: active`);
+    console.log(`📡 JioSaavn proxy: active (Spoofing Indian IP)`);
     console.log(`📦 Redis cache: ${redisReady ? 'enabled' : 'disabled (will retry)'}`);
     console.log(`🌐 HOST_IP override: ${HOST_IP || 'auto-detect from request host'}`);
     console.log('==============================================\n');
