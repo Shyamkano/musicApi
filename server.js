@@ -142,7 +142,7 @@ app.post('/api/user-playlists', async (req, res) => {
                 name: name.trim(),
                 description: description || '',
                 image: image || null,
-                tracks: Array.isArray(tracks) ? tracks : [],
+                tracks: Array.isArray(tracks) ? tracks :[],
             })
             .returning();
 
@@ -174,7 +174,7 @@ app.post('/api/user-playlists/:id/tracks', async (req, res) => {
         const playlist = rows[0];
         if (!playlist) return res.status(404).json({ error: 'Playlist not found' });
 
-        const existingTracks = playlist.tracks || [];
+        const existingTracks = playlist.tracks ||[];
         if (existingTracks.find(t => t.id === track.id)) {
             return res.status(400).json({ error: 'Track already in playlist' });
         }
@@ -288,7 +288,7 @@ const getHostInfo = (req) => {
     return { proto, host };
 };
 
-const safeArray = (value) => (Array.isArray(value) ? value : []);
+const safeArray = (value) => (Array.isArray(value) ? value :[]);
 
 const normalizeSong = (song) => {
     if (!song?.id) return null;
@@ -376,7 +376,7 @@ app.get('/api/health', (req, res) => {
             status: 'ok',
             redis: redisReady ? 'connected' : 'offline (no cache)',
             time: new Date().toISOString(),
-            host: getHost(req),
+            host: getHostInfo(req).host, // Fixed typo in your original file from `getHost` to `getHostInfo`
         },
     });
 });
@@ -385,17 +385,18 @@ app.get('/api/health', (req, res) => {
 // 2. HOME SCREEN
 // ==========================================
 app.get('/api/home', async (req, res) => {
-    const cacheKey = 'home_data_v10';
+    const lang = String(req.query.lang || 'english').trim();
+    const cacheKey = `home_data_v10_${lang}`;
 
     try {
         const cached = await cacheGet(cacheKey);
         if (cached) {
-            console.log('⚡ [Home] served from cache');
+            console.log(`⚡ [Home] served from cache (${lang})`);
             return res.json(JSON.parse(cached));
         }
 
-        console.log('🌐 [Home] fetching from JioSaavn...');
-        const response = await axios.get(`${SAAVN_BASE_URL}&__call=webapi.getLaunchData`);
+        console.log(`🌐 [Home] fetching from JioSaavn (${lang})...`);
+        const response = await axios.get(`${SAAVN_BASE_URL}&__call=webapi.getLaunchData&languages=${lang}`);
         const raw = response.data || {};
 
         const allTrending = safeArray(raw.new_trending);
@@ -410,7 +411,7 @@ app.get('/api/home', async (req, res) => {
             .filter((song) => song && song.has_audio)
             .slice(0, 15);
 
-        const featuredArtists = [
+        const featuredArtists =[
             ...allTrending.filter((item) => item.type === 'artist'),
             ...chartsRaw.filter((item) => item.type === 'artist'),
         ]
@@ -451,7 +452,7 @@ app.get('/api/home', async (req, res) => {
             .slice(0, 12);
 
         // Extra discover mix: charts + trending playlists (different from new_albums)
-        const discoverMix = [
+        const discoverMix =[
             ...topCharts,
             ...trendingPlaylistsRaw.map(normalizePlaylist).filter(Boolean)
         ]
@@ -484,9 +485,11 @@ app.get('/api/home', async (req, res) => {
 // ==========================================
 app.get('/api/search', async (req, res) => {
     const query = String(req.query.query || '').trim();
+    const lang = String(req.query.lang || 'english').trim();
+    
     if (!query) return sendError(res, 400, 'Query required');
 
-    const cacheKey = `search:global:${query.toLowerCase()}`;
+    const cacheKey = `search:global:${query.toLowerCase()}:${lang}`;
 
     try {
         const cached = await cacheGet(cacheKey);
@@ -497,7 +500,7 @@ app.get('/api/search', async (req, res) => {
 
         console.log(`🌐 [Search] "${query}" fetching from JioSaavn...`);
         const response = await axios.get(
-            `${SAAVN_BASE_URL}&__call=search.getResults&q=${encodeURIComponent(query)}&n=20`
+            `${SAAVN_BASE_URL}&__call=search.getResults&q=${encodeURIComponent(query)}&n=20&languages=${lang}`
         );
 
         const results = safeArray(response.data?.results);
@@ -523,17 +526,18 @@ app.get('/api/search/songs', async (req, res) => {
     const query = String(req.query.query || '').trim();
     const page = Number(req.query.page || 0);
     const limit = Number(req.query.limit || 10);
+    const lang = String(req.query.lang || 'english').trim();
 
     if (!query) return sendError(res, 400, 'Query required');
 
-    const cacheKey = `search:songs:${query.toLowerCase()}:${page}:${limit}`;
+    const cacheKey = `search:songs:${query.toLowerCase()}:${page}:${limit}:${lang}`;
 
     try {
         const cached = await cacheGet(cacheKey);
         if (cached) return res.json(JSON.parse(cached));
 
         const response = await axios.get(
-            `${SAAVN_BASE_URL}&__call=search.getResults&q=${encodeURIComponent(query)}&n=${limit}&p=${page}`
+            `${SAAVN_BASE_URL}&__call=search.getResults&q=${encodeURIComponent(query)}&n=${limit}&p=${page}&languages=${lang}`
         );
 
         const results = safeArray(response.data?.results);
@@ -553,11 +557,13 @@ app.get('/api/search/songs', async (req, res) => {
 // ==========================================
 app.get('/api/search/albums', async (req, res) => {
     const query = String(req.query.query || '').trim();
+    const lang = String(req.query.lang || 'english').trim();
+    
     if (!query) return sendError(res, 400, 'Query required');
 
     try {
         const response = await axios.get(
-            `${SAAVN_BASE_URL}&__call=search.getAlbumResults&q=${encodeURIComponent(query)}&n=20&p=0`
+            `${SAAVN_BASE_URL}&__call=search.getAlbumResults&q=${encodeURIComponent(query)}&n=20&p=0&languages=${lang}`
         );
         const results = safeArray(response.data?.results);
         const albums = results.map(normalizeAlbum).filter(Boolean);
@@ -572,11 +578,13 @@ app.get('/api/search/albums', async (req, res) => {
 // ==========================================
 app.get('/api/search/artists', async (req, res) => {
     const query = String(req.query.query || '').trim();
+    const lang = String(req.query.lang || 'english').trim();
+    
     if (!query) return sendError(res, 400, 'Query required');
 
     try {
         const response = await axios.get(
-            `${SAAVN_BASE_URL}&__call=search.getArtistResults&q=${encodeURIComponent(query)}&n=20&p=0`
+            `${SAAVN_BASE_URL}&__call=search.getArtistResults&q=${encodeURIComponent(query)}&n=20&p=0&languages=${lang}`
         );
         const results = safeArray(response.data?.results);
         const artists = results.map(normalizeArtist).filter(Boolean);
@@ -591,11 +599,13 @@ app.get('/api/search/artists', async (req, res) => {
 // ==========================================
 app.get('/api/search/playlists', async (req, res) => {
     const query = String(req.query.query || '').trim();
+    const lang = String(req.query.lang || 'english').trim();
+    
     if (!query) return sendError(res, 400, 'Query required');
 
     try {
         const response = await axios.get(
-            `${SAAVN_BASE_URL}&__call=search.getPlaylistResults&q=${encodeURIComponent(query)}&n=20&p=0`
+            `${SAAVN_BASE_URL}&__call=search.getPlaylistResults&q=${encodeURIComponent(query)}&n=20&p=0&languages=${lang}`
         );
         const results = safeArray(response.data?.results);
         const playlists = results.map(normalizePlaylist).filter(Boolean);
@@ -838,13 +848,14 @@ app.get('/api/lyrics', async (req, res) => {
 // 8. FEATURED PLAYLISTS
 // ==========================================
 app.get('/api/playlists', async (req, res) => {
-    const cacheKey = 'playlists:featured';
+    const lang = String(req.query.lang || 'english').trim();
+    const cacheKey = `playlists:featured:${lang}`;
 
     try {
         const cached = await cacheGet(cacheKey);
         if (cached) return res.json(JSON.parse(cached));
 
-        const response = await axios.get(`${SAAVN_BASE_URL}&__call=webapi.getLaunchData`);
+        const response = await axios.get(`${SAAVN_BASE_URL}&__call=webapi.getLaunchData&languages=${lang}`);
         const raw = response.data || {};
 
         const playlists =
