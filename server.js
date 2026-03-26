@@ -46,7 +46,7 @@ const initRedis = async () => {
     try {
         const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
         redisClient = createClient({ url: redisUrl });
-        
+
         redisClient.on('error', (err) => {
             if (redisReady) console.log('⚠️ Redis disconnected:', err.message);
             redisReady = false;
@@ -160,7 +160,7 @@ app.post('/api/user-playlists', async (req, res) => {
                 name: name.trim(),
                 description: description || '',
                 image: image || null,
-                tracks: Array.isArray(tracks) ? tracks :[],
+                tracks: Array.isArray(tracks) ? tracks : [],
             })
             .returning();
 
@@ -192,7 +192,7 @@ app.post('/api/user-playlists/:id/tracks', async (req, res) => {
         const playlist = rows[0];
         if (!playlist) return res.status(404).json({ error: 'Playlist not found' });
 
-        const existingTracks = playlist.tracks ||[];
+        const existingTracks = playlist.tracks || [];
         if (existingTracks.find(t => t.id === track.id)) {
             return res.status(400).json({ error: 'Track already in playlist' });
         }
@@ -289,9 +289,9 @@ const cleanImage = (img) => {
         url = url.replace('50x50', '500x500');
     } else {
         url = url.replace(/_150(\.jpg|\.png)/, '_500$1')
-                 .replace(/_50(\.jpg|\.png)/, '_500$1')
-                 .replace('/150/', '/500/')
-                 .replace('/50/', '/500/');
+            .replace(/_50(\.jpg|\.png)/, '_500$1')
+            .replace('/150/', '/500/')
+            .replace('/50/', '/500/');
     }
 
     return url;
@@ -303,7 +303,7 @@ const getHostInfo = (req) => {
     return { proto, host };
 };
 
-const safeArray = (value) => (Array.isArray(value) ? value :[]);
+const safeArray = (value) => (Array.isArray(value) ? value : []);
 
 const normalizeSong = (song) => {
     if (!song?.id) return null;
@@ -311,22 +311,30 @@ const normalizeSong = (song) => {
     const encryptedUrl =
         song?.more_info?.encrypted_media_url || song?.encrypted_media_url || null;
 
+    let artistId = '';
+    const artists = song?.more_info?.artistMap?.primary_artists || song?.more_info?.artistMap?.artists || [];
+    if (artists.length > 0) {
+        artistId = String(artists[0].id);
+    }
+
     return {
         id: String(song.id),
         title: cleanText(song.title),
         artist: cleanText(song?.more_info?.singers || song.subtitle || ''),
         image: cleanImage(song.image),
         album_id: String(song?.more_info?.albumid || song.albumid || ''),
+        artist_id: artistId,
         has_audio: !!encryptedUrl,
         type: 'song',
     };
 };
 
 const normalizeArtist = (artist) => {
-    if (!artist?.id) return null;
+    const id = artist.artistId || artist.id;
+    if (!id) return null;
 
     return {
-        id: String(artist.id),
+        id: String(id),
         name: cleanText(artist.title || artist.name || ''),
         image: cleanImage(artist.image),
         type: 'artist',
@@ -370,7 +378,7 @@ const normalizeLyrics = (lyrics) => {
         .replace(/&#039;/g, "'")
         .replace(/&lt;/g, '<')
         .replace(/&gt;/g, '>')
-        .replace(/<[^>]*>/g, '') 
+        .replace(/<[^>]*>/g, '')
         .trim();
 };
 
@@ -426,7 +434,7 @@ app.get('/api/home', async (req, res) => {
             .filter((song) => song && song.has_audio)
             .slice(0, 15);
 
-        const featuredArtists =[
+        const featuredArtists = [
             ...allTrending.filter((item) => item.type === 'artist'),
             ...chartsRaw.filter((item) => item.type === 'artist'),
         ]
@@ -466,7 +474,7 @@ app.get('/api/home', async (req, res) => {
             .filter(Boolean)
             .slice(0, 12);
 
-        const discoverMix =[
+        const discoverMix = [
             ...topCharts,
             ...trendingPlaylistsRaw.map(normalizePlaylist).filter(Boolean)
         ]
@@ -500,7 +508,7 @@ app.get('/api/home', async (req, res) => {
 app.get('/api/search', async (req, res) => {
     const query = String(req.query.query || '').trim();
     const lang = String(req.query.lang || 'english').trim();
-    
+
     if (!query) return sendError(res, 400, 'Query required');
 
     const cacheKey = `search:global:${query.toLowerCase()}:${lang}`;
@@ -572,7 +580,7 @@ app.get('/api/search/songs', async (req, res) => {
 app.get('/api/search/albums', async (req, res) => {
     const query = String(req.query.query || '').trim();
     const lang = String(req.query.lang || 'english').trim();
-    
+
     if (!query) return sendError(res, 400, 'Query required');
 
     try {
@@ -593,7 +601,7 @@ app.get('/api/search/albums', async (req, res) => {
 app.get('/api/search/artists', async (req, res) => {
     const query = String(req.query.query || '').trim();
     const lang = String(req.query.lang || 'english').trim();
-    
+
     if (!query) return sendError(res, 400, 'Query required');
 
     try {
@@ -614,7 +622,7 @@ app.get('/api/search/artists', async (req, res) => {
 app.get('/api/search/playlists', async (req, res) => {
     const query = String(req.query.query || '').trim();
     const lang = String(req.query.lang || 'english').trim();
-    
+
     if (!query) return sendError(res, 400, 'Query required');
 
     try {
@@ -738,6 +746,12 @@ app.get('/api/song', async (req, res) => {
         const { proto, host } = getHostInfo(req);
         const proxyUrl = `${proto}://${host}/api/stream?url=${encodeURIComponent(directPlayUrl)}`;
 
+        let artistId = '';
+        const artists = songData?.more_info?.artistMap?.primary_artists || songData?.more_info?.artistMap?.artists || [];
+        if (artists.length > 0) {
+            artistId = String(artists[0].id);
+        }
+
         return res.json({
             success: true,
             data: {
@@ -748,7 +762,8 @@ app.get('/api/song', async (req, res) => {
                 image: cleanImage(songData.image),
                 duration: songData?.more_info?.duration || '0',
                 has_lyrics: songData?.more_info?.has_lyrics === 'true',
-                album_id: String(songData?.more_info?.album_id || songData?.albumid || ''),
+                album_id: String(songData?.more_info?.albumid || songData?.albumid || ''),
+                artist_id: artistId,
                 audio_url: proxyUrl,
             },
         });
