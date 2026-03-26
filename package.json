@@ -1,15 +1,17 @@
 {
-  "name": "musicapi",
+  "name": "groovli-api",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "A high-performance Node.js API that serves as the backend for the Groovli music player.",
+  "main": "server.js",
+
   "scripts": {
     "start": "node server.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
-  "author": "",
+  "author": "Shyamkano",
   "license": "ISC",
+
   "type": "module",
   "dependencies": {
     "@neondatabase/serverless": "^1.0.2",
