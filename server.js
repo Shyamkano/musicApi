@@ -4,7 +4,7 @@ import cors from 'cors';
 import { createClient } from 'redis';
 import { eq, and } from 'drizzle-orm';
 import { playlists, users, likedSongs, pushTokens } from './db/schema.js';
-import db from './db/index.js';
+import { db } from './db/index.js';
 import { Expo } from 'expo-server-sdk';
 import cron from 'node-cron';
 
