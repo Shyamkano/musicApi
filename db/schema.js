@@ -25,3 +25,8 @@ export const playlists = pgTable('playlists', {
   tracks: jsonb('tracks').default([]), // Array of song objects/IDs
   createdAt: timestamp('created_at').defaultNow(),
 });
+
+export const pushTokens = pgTable('push_tokens', {
+  token: text('token').primaryKey(),
+  createdAt: timestamp('created_at').defaultNow(),
+});

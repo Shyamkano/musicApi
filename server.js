@@ -2,11 +2,15 @@ import express from 'express';
 import axios from 'axios';
 import cors from 'cors';
 import { createClient } from 'redis';
-import { db } from './db/index.js';
-import { users, likedSongs, playlists } from './db/schema.js';
 import { eq, and } from 'drizzle-orm';
+import { playlists, users, likedSongs, pushTokens } from './db/schema.js';
+import db from './db/index.js';
+import { Expo } from 'expo-server-sdk';
+import cron from 'node-cron';
 
 const app = express();
+const expo = new Expo();
+
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
@@ -991,6 +995,94 @@ app.get('/api/stream', async (req, res) => {
         console.error('[Stream] Error:', error.message);
         return res.status(500).send('Error proxying stream');
     }
+});
+
+// ==========================================
+// PUSH NOTIFICATIONS
+// ==========================================
+
+// 1. Register a device token
+app.post('/api/push-token', async (req, res) => {
+    try {
+        const { token } = req.body;
+        if (!token || !Expo.isExpoPushToken(token)) {
+            return res.status(400).json({ success: false, error: 'Invalid Expo push token' });
+        }
+        
+        // Upsert the token
+        await db.insert(pushTokens)
+            .values({ token })
+            .onConflictDoNothing();
+            
+        res.json({ success: true, message: 'Token registered' });
+    } catch (error) {
+        console.error('Push token error:', error);
+        res.status(500).json({ success: false, error: 'Failed to register token' });
+    }
+});
+
+// Helper to send notifications to all registered devices
+const sendPushNotificationToAll = async (title, body, data = {}) => {
+    try {
+        const allTokens = await db.select().from(pushTokens);
+        if (!allTokens || allTokens.length === 0) return;
+
+        let messages = [];
+        for (let pushToken of allTokens) {
+            if (!Expo.isExpoPushToken(pushToken.token)) {
+                console.error(`Push token ${pushToken.token} is not a valid Expo push token`);
+                continue;
+            }
+            messages.push({
+                to: pushToken.token,
+                sound: 'default',
+                title: title,
+                body: body,
+                data: data,
+            });
+        }
+
+        let chunks = expo.chunkPushNotifications(messages);
+        for (let chunk of chunks) {
+            try {
+                let ticketChunk = await expo.sendPushNotificationsAsync(chunk);
+                console.log('Push tickets:', ticketChunk);
+            } catch (error) {
+                console.error('Error sending push chunk:', error);
+            }
+        }
+    } catch (error) {
+        console.error('Failed to broadcast push notifications:', error);
+    }
+};
+
+// 2. Manual trigger endpoint (for you to send custom wishes/announcements)
+app.post('/api/send-notification', async (req, res) => {
+    try {
+        const { title, body, data } = req.body;
+        if (!title || !body) {
+            return res.status(400).json({ success: false, error: 'Title and body are required' });
+        }
+        await sendPushNotificationToAll(title, body, data);
+        res.json({ success: true, message: 'Notifications sent to all devices' });
+    } catch (error) {
+        console.error('Manual push error:', error);
+        res.status(500).json({ success: false, error: 'Failed to send notifications' });
+    }
+});
+
+// 3. Automatic Cron Job (Sends daily at 12:00 PM and 6:00 PM)
+// Note: You can change the schedule using standard cron syntax
+cron.schedule('0 12,18 * * *', async () => {
+    console.log('Running automatic push notification job...');
+    const titles = ["Time for some music?", "New trending tracks!", "Discover your next favorite song!"];
+    const bodies = ["Open Groovli and discover what's trending today.", "The charts have been updated. Check out what people are listening to!", "Your ears deserve a treat. Play some tunes now!"];
+    
+    // Pick random message
+    const randomTitle = titles[Math.floor(Math.random() * titles.length)];
+    const randomBody = bodies[Math.floor(Math.random() * bodies.length)];
+    
+    await sendPushNotificationToAll(randomTitle, randomBody);
 });
 
 // ==========================================
